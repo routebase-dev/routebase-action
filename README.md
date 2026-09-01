@@ -109,17 +109,21 @@ organizations need nothing.
 
 ## Exit codes
 
-Stable since CLI 1.0.0.
-
 | Code | Meaning |
 | --- | --- |
 | `0` | Success |
 | `1` | The run failed — tests failed, or a finding tripped `fail-on` |
 | `2` | Configuration error (missing input, bad flag) |
 | `3` | Network error, or the run did not complete |
-| `4` | Authentication error (bad key, or wrong region) |
+| `4` | Authentication error — the key is wrong, in the wrong region, or lacks the permission the command needs |
 | `5` | Project, suite or profile not found |
 | `6` | Conflict |
+
+The meanings have been stable since CLI 1.0.0, with one change in **2.0.0**: a key that
+authenticates but lacks the required permission (HTTP `403`) now exits `4` for every command.
+`run` and `list` returned `3` for that case before, which sent you looking at the network rather
+than at the key's scopes. If your pipeline branches on `3` for either command, check it before
+moving `cli-version` to `2.0.0`.
 
 ## Versioning
 
