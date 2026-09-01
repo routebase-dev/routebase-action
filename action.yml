@@ -22,7 +22,7 @@ inputs:
   cli-version:
     description: 'Version of the Routebase.Cli NuGet package to install. Pinned on purpose — see the README.'
     required: false
-    default: '1.0.1'
+    default: '2.0.0'
 
   project:
     description: 'Project id. Required for run and scan; optional for promote.'
@@ -63,7 +63,7 @@ inputs:
 
 outputs:
   exit-code:
-    description: 'Exit code of the Routebase CLI. 0 success, 1 run failed or gate tripped, 2 config, 3 network, 4 auth, 5 not found, 6 conflict.'
+    description: 'Exit code of the Routebase CLI. 0 success, 1 run failed or gate tripped, 2 config, 3 network, 4 auth or missing scope, 5 not found, 6 conflict.'
     value: ${{ steps.execute.outputs.exit-code }}
   report-path:
     description: 'Path of the written report, when the output input was set. Empty otherwise.'
@@ -194,8 +194,8 @@ runs:
           0) echo "Routebase finished successfully." ;;
           1) echo "::error::The run failed — tests failed, or a finding tripped --fail-on." ;;
           2) echo "::error::Configuration error (missing API key or a bad flag)." ;;
-          3) echo "::error::Network error, or the run did not complete. Note: 'routebase run' also reports 3 when the API answers 403 — an API key without the tests:execute scope looks like this." ;;
-          4) echo "::error::Authentication failed. Check the api-key input and the region." ;;
+          3) echo "::error::Network error, or the run did not complete." ;;
+          4) echo "::error::Authentication failed. Check the api-key input, its scopes and the region." ;;
           5) echo "::error::Project, suite or profile not found. Check the ids and the region." ;;
           6) echo "::error::Conflict — a page changed remotely since the last pull." ;;
           *) echo "::error::Routebase CLI exited with ${CODE:-unknown}." ;;
