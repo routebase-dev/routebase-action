@@ -14,7 +14,7 @@ The suite runs against your environment, and the job fails when a test fails. `-
 gives you a report GitHub renders as a real test summary.
 
 ```yaml
-- uses: routebase-dev/routebase-action@v1
+- uses: routebase-dev/routebase-action@v2
   with:
     command: run
     api-key: ${{ secrets.ROUTEBASE_API_KEY }}
@@ -42,7 +42,7 @@ permissions:
   security-events: write
 
 steps:
-  - uses: routebase-dev/routebase-action@v1
+  - uses: routebase-dev/routebase-action@v2
     with:
       command: scan
       api-key: ${{ secrets.ROUTEBASE_API_KEY }}
@@ -64,7 +64,7 @@ Records which version an environment actually serves, so drift is measured again
 contract.
 
 ```yaml
-- uses: routebase-dev/routebase-action@v1
+- uses: routebase-dev/routebase-action@v2
   with:
     command: promote
     api-key: ${{ secrets.ROUTEBASE_API_KEY }}
