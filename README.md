@@ -127,11 +127,16 @@ moving `cli-version` to `2.0.0`.
 
 ## Versioning
 
-`@v1` tracks the latest compatible release. Pin `@v1.0.0` if you want a fixed one.
+`@v2` tracks the latest v2 release and is what you want. `@v1` stays on CLI 1.0.1, where a key
+with missing scopes exits `3` instead of `4` — see the note under Exit codes. Pin a full version
+like `@v2.0.0` if you want a fixed one.
 
 The action installs a **pinned** version of the `Routebase.Cli` NuGet package rather than the
 latest. An action that silently moved to a new CLI would change what your pipeline does without
-anyone deciding it. Override with `cli-version` when you want a newer one.
+anyone deciding it. Override with `cli-version` when you want a different one.
+
+That the action's major happens to match the CLI's is a coincidence, not a promise: the two ship
+on their own cycles and will diverge at the first change that touches only one of them.
 
 ## Credentials on the runner
 
