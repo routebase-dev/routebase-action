@@ -1,0 +1,203 @@
+name: 'Routebase'
+description: 'Run Routebase API test suites and security scans in CI, or promote a spec version after a deploy.'
+author: 'Routebase GmbH'
+
+branding:
+  # `activity` is the mark the shared test report carries in the product.
+  # The colour list GitHub accepts has no sage; green is the nearest allowed value.
+  icon: 'activity'
+  color: 'green'
+
+inputs:
+  command:
+    description: 'What to run: run (test suite), scan (security scan), or promote (pin a spec version to an environment).'
+    required: true
+  api-key:
+    description: 'Routebase API key. Create one under Settings → API Keys and pass it from a repository secret.'
+    required: true
+  region:
+    description: 'Data region of your organization: eu (default) or us. Anything else is ignored and the EU region is used.'
+    required: false
+    default: ''
+  cli-version:
+    description: 'Version of the Routebase.Cli NuGet package to install. Pinned on purpose — see the README.'
+    required: false
+    default: '1.0.1'
+
+  project:
+    description: 'Project id. Required for run and scan; optional for promote.'
+    required: false
+    default: ''
+  suite:
+    description: 'Test suite id. Required for command: run.'
+    required: false
+    default: ''
+  environment:
+    description: 'Environment name or id. Optional for run, required for promote.'
+    required: false
+    default: ''
+  profile:
+    description: 'Scan profile id. Required for command: scan.'
+    required: false
+    default: ''
+  fail-on:
+    description: 'Fail the scan when a finding of this severity or higher is present (e.g. high).'
+    required: false
+    default: ''
+  spec:
+    description: 'API specification name or id. Required for command: promote.'
+    required: false
+    default: ''
+  version:
+    description: 'Spec version to promote, e.g. 1.2.0. Required for command: promote.'
+    required: false
+    default: ''
+  format:
+    description: 'Output format. run: text, json, junit. scan: text, json, sarif.'
+    required: false
+    default: ''
+  output:
+    description: 'Write the report to this file instead of stdout. Needed to upload JUnit or SARIF afterwards.'
+    required: false
+    default: ''
+
+outputs:
+  exit-code:
+    description: 'Exit code of the Routebase CLI. 0 success, 1 run failed or gate tripped, 2 config, 3 network, 4 auth, 5 not found, 6 conflict.'
+    value: ${{ steps.execute.outputs.exit-code }}
+  report-path:
+    description: 'Path of the written report, when the output input was set. Empty otherwise.'
+    value: ${{ steps.execute.outputs.report-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    # 10.0.x mirrors cli-nuget-release.yml, which builds the package this installs.
+    - name: Set up .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: Install the Routebase CLI
+      shell: bash
+      env:
+        CLI_VERSION: ${{ inputs.cli-version }}
+      run: |
+        dotnet tool install --global Routebase.Cli --version "$CLI_VERSION"
+        echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+    # The CLI reads the key only from ~/.routebase/config.json — there is no
+    # ROUTEBASE_API_KEY. The file is removed again in the cleanup step below,
+    # which runs even when the command fails.
+    - name: Configure credentials
+      shell: bash
+      env:
+        RB_API_KEY: ${{ inputs.api-key }}
+      run: |
+        if [ -z "$RB_API_KEY" ]; then
+          echo "::error::api-key is empty. Pass a Routebase API key from a repository secret."
+          exit 1
+        fi
+        echo "::add-mask::$RB_API_KEY"
+        routebase config set-api-key "$RB_API_KEY" > /dev/null
+
+    # Every input arrives through env rather than being interpolated into the
+    # script: a `${{ inputs.x }}` inside a run block is substituted before bash
+    # sees it, so a crafted input would execute as code.
+    #
+    # The command must not abort the action here — the cleanup step below has to
+    # run first — so the exit code is captured and re-raised at the very end.
+    # `continue-on-error` is not available on composite steps.
+    - name: Run Routebase
+      id: execute
+      shell: bash
+      env:
+        ROUTEBASE_REGION: ${{ inputs.region }}
+        RB_COMMAND: ${{ inputs.command }}
+        RB_PROJECT: ${{ inputs.project }}
+        RB_SUITE: ${{ inputs.suite }}
+        RB_ENVIRONMENT: ${{ inputs.environment }}
+        RB_PROFILE: ${{ inputs.profile }}
+        RB_FAIL_ON: ${{ inputs.fail-on }}
+        RB_SPEC: ${{ inputs.spec }}
+        RB_VERSION: ${{ inputs.version }}
+        RB_FORMAT: ${{ inputs.format }}
+        RB_OUTPUT: ${{ inputs.output }}
+      run: |
+        set -u
+        args=()
+
+        require() {
+          if [ -z "$2" ]; then
+            echo "::error::input '$1' is required for command: $RB_COMMAND"
+            exit 2
+          fi
+        }
+
+        case "$RB_COMMAND" in
+          run)
+            require project "$RB_PROJECT"
+            require suite "$RB_SUITE"
+            args=(run "$RB_PROJECT" "$RB_SUITE")
+            if [ -n "$RB_ENVIRONMENT" ]; then args+=(--environment "$RB_ENVIRONMENT"); fi
+            ;;
+          scan)
+            require project "$RB_PROJECT"
+            require profile "$RB_PROFILE"
+            args=(scan "$RB_PROJECT" "$RB_PROFILE")
+            if [ -n "$RB_FAIL_ON" ]; then args+=(--fail-on "$RB_FAIL_ON"); fi
+            ;;
+          promote)
+            require spec "$RB_SPEC"
+            require version "$RB_VERSION"
+            require environment "$RB_ENVIRONMENT"
+            args=(promote "$RB_SPEC" "$RB_VERSION" --env "$RB_ENVIRONMENT")
+            if [ -n "$RB_PROJECT" ]; then args+=(--project "$RB_PROJECT"); fi
+            ;;
+          *)
+            echo "::error::unknown command '$RB_COMMAND'. Use run, scan or promote."
+            exit 2
+            ;;
+        esac
+
+        if [ -n "$RB_FORMAT" ]; then args+=(--format "$RB_FORMAT"); fi
+        if [ -n "$RB_OUTPUT" ]; then
+          mkdir -p "$(dirname "$RB_OUTPUT")"
+          args+=(--output "$RB_OUTPUT")
+        fi
+
+        echo "+ routebase ${args[*]}"
+        set +e
+        routebase "${args[@]}"
+        code=$?
+        set -e
+
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        echo "report-path=$RB_OUTPUT" >> "$GITHUB_OUTPUT"
+
+    # Always: a failed run must not leave the key on the runner. Matters on
+    # self-hosted runners, where the home directory outlives the job.
+    - name: Remove credentials
+      if: always()
+      shell: bash
+      run: rm -f "$HOME/.routebase/config.json"
+
+    # Re-raise what the CLI returned, so a failing suite or a tripped scan gate
+    # turns the job red instead of passing silently.
+    - name: Report result
+      if: always()
+      shell: bash
+      env:
+        CODE: ${{ steps.execute.outputs.exit-code }}
+      run: |
+        case "${CODE:-2}" in
+          0) echo "Routebase finished successfully." ;;
+          1) echo "::error::The run failed — tests failed, or a finding tripped --fail-on." ;;
+          2) echo "::error::Configuration error (missing API key or a bad flag)." ;;
+          3) echo "::error::Network error, or the run did not complete. Note: 'routebase run' also reports 3 when the API answers 403 — an API key without the tests:execute scope looks like this." ;;
+          4) echo "::error::Authentication failed. Check the api-key input and the region." ;;
+          5) echo "::error::Project, suite or profile not found. Check the ids and the region." ;;
+          6) echo "::error::Conflict — a page changed remotely since the last pull." ;;
+          *) echo "::error::Routebase CLI exited with ${CODE:-unknown}." ;;
+        esac
+        exit "${CODE:-2}"
