@@ -1,4 +1,4 @@
-name: 'Routebase'
+name: 'Routebase API Testing'
 description: 'Run Routebase API test suites and security scans in CI, or promote a spec version after a deploy.'
 author: 'Routebase GmbH'
 
