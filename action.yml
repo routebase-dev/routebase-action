@@ -22,7 +22,7 @@ inputs:
   cli-version:
     description: 'Version of the Routebase.Cli NuGet package to install. Pinned on purpose — see the README.'
     required: false
-    default: '2.0.0'
+    default: '2.1.1'
 
   project:
     description: 'Project id. Required for run and scan; optional for promote.'
