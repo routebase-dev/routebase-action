@@ -24,7 +24,7 @@ gives you a report GitHub renders as a real test summary.
     format: junit
     output: reports/routebase.xml
 
-- uses: dorny/test-reporter@v1
+- uses: dorny/test-reporter@v3
   if: always()
   with:
     name: API contract tests
