@@ -1,7 +1,7 @@
 # Routebase for GitHub Actions
 
-Run [Routebase](https://routebase.dev) API test suites and security scans in CI, or promote a spec
-version to an environment after a deploy.
+Run [Routebase](https://routebase.dev) API test suites and security scans in CI, push a spec generated
+from code, or promote a spec version to an environment after a deploy.
 
 Routebase derives your documentation portal, mock servers, contract tests and monitoring from one
 living OpenAPI description. This action runs the parts of that which belong in a pipeline.
@@ -58,6 +58,38 @@ steps:
       sarif_file: routebase.sarif
 ```
 
+## Push a spec generated from code
+
+Keeps one living specification in Routebase when your OpenAPI document comes out of the code. The
+push updates the spec's draft in place, so endpoint links of tests, mock rules and monitors stay.
+Needs a key with the scopes `specs:write` and `specs:delete` (`specs:read` for `dry-run`), and
+`@v2.2.0` or later of this action (CLI `2.3.0`).
+
+```yaml
+# On a pull request: show what the merge would change
+- uses: routebase-dev/routebase-action@v2
+  with:
+    command: spec-push
+    api-key: ${{ secrets.ROUTEBASE_API_KEY }}
+    project: ${{ vars.ROUTEBASE_PROJECT_ID }}
+    spec: Orders API
+    file: openapi.json
+    dry-run: true
+
+# On main: write it
+- uses: routebase-dev/routebase-action@v2
+  with:
+    command: spec-push
+    api-key: ${{ secrets.ROUTEBASE_API_KEY }}
+    project: ${{ vars.ROUTEBASE_PROJECT_ID }}
+    spec: Orders API
+    file: openapi.json
+```
+
+When someone edited a value in Routebase that the file owns since the last push, the push stops
+with exit code `6` and lists the conflicts. Set `overwrite: true` to let the file win. The first push
+into a spec that has content but was never pushed needs `overwrite: true` once.
+
 ## Promote a version after a deploy
 
 Records which version an environment actually serves, so drift is measured against the right
@@ -77,18 +109,22 @@ contract.
 
 | Input | Required for | Description |
 | --- | --- | --- |
-| `command` | always | `run`, `scan` or `promote` |
+| `command` | always | `run`, `scan`, `spec-push` or `promote` |
 | `api-key` | always | Pass from a repository secret, never inline |
 | `region` | — | `us` if your organization is hosted in the US. See below |
-| `project` | `run`, `scan` | Project id. Optional for `promote` |
+| `project` | `run`, `scan` | Project id. Optional for `promote` and `spec-push` |
 | `suite` | `run` | Test suite id |
 | `profile` | `scan` | Scan profile id |
 | `fail-on` | — | Fail the scan at this severity or higher, e.g. `high` |
-| `spec` | `promote` | API specification, name or id |
+| `spec` | `promote`, `spec-push` | API specification, name or id |
+| `file` | `spec-push` | OpenAPI document to push, YAML or JSON |
+| `dry-run` | — | `spec-push`: show the changes without writing |
+| `overwrite` | — | `spec-push`: let the file win over edits made in Routebase |
+| `folders-from-tags` | — | `spec-push`: put new endpoints into the folder of their first tag |
 | `version` | `promote` | Version to promote, e.g. `1.4.0` |
 | `environment` | `promote` | Target environment. Optional for `run` |
-| `format` | — | `run`: `text`, `json`, `junit`. `scan`: `text`, `json`, `sarif` |
-| `output` | — | Write the report to this path instead of stdout |
+| `format` | — | `run`: `text`, `json`, `junit`. `scan`: `text`, `json`, `sarif`. `spec-push`: `text`, `json` |
+| `output` | — | Write the report to this path instead of stdout. Not used by `spec-push` |
 | `cli-version` | — | Version of the `Routebase.Cli` package. See below |
 
 Inputs that do not apply to the chosen `command` are ignored.
@@ -113,11 +149,11 @@ organizations need nothing.
 | --- | --- |
 | `0` | Success |
 | `1` | The run failed — tests failed, or a finding tripped `fail-on` |
-| `2` | Configuration error (missing input, bad flag) |
+| `2` | Configuration or input error (missing input, bad flag, a file that is not valid OpenAPI) |
 | `3` | Network error, or the run did not complete |
 | `4` | Authentication error — the key is wrong, in the wrong region, or lacks the permission the command needs |
-| `5` | Project, suite or profile not found |
-| `6` | Conflict |
+| `5` | Project, suite, profile, spec or version not found |
+| `6` | Conflict with the current state in Routebase, for `spec-push` values edited in Routebase since the last push, or a spec without a single draft |
 
 The meanings have been stable since CLI 1.0.0, with one change in **2.0.0**: a key that
 authenticates but lacks the required permission (HTTP `403`) now exits `4` for every command.
