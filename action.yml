@@ -1,5 +1,5 @@
 name: 'Routebase API Testing'
-description: 'Run Routebase API test suites and security scans in CI, or promote a spec version after a deploy.'
+description: 'Run Routebase API test suites and security scans in CI, push a spec generated from code, or promote a spec version after a deploy.'
 author: 'Routebase GmbH'
 
 branding:
@@ -10,7 +10,7 @@ branding:
 
 inputs:
   command:
-    description: 'What to run: run (test suite), scan (security scan), or promote (pin a spec version to an environment).'
+    description: 'What to run: run (test suite), scan (security scan), spec-push (push an OpenAPI file into a spec''s draft), or promote (pin a spec version to an environment).'
     required: true
   api-key:
     description: 'Routebase API key. Create one under Settings → API Keys and pass it from a repository secret.'
@@ -22,10 +22,10 @@ inputs:
   cli-version:
     description: 'Version of the Routebase.Cli NuGet package to install. Pinned on purpose — see the README.'
     required: false
-    default: '2.2.0'
+    default: '2.3.0'
 
   project:
-    description: 'Project id. Required for run and scan; optional for promote.'
+    description: 'Project id. Required for run and scan; optional for promote and spec-push.'
     required: false
     default: ''
   suite:
@@ -45,7 +45,7 @@ inputs:
     required: false
     default: ''
   spec:
-    description: 'API specification name or id. Required for command: promote.'
+    description: 'API specification name or id. Required for command: promote and spec-push.'
     required: false
     default: ''
   version:
@@ -53,11 +53,27 @@ inputs:
     required: false
     default: ''
   format:
-    description: 'Output format. run: text, json, junit. scan: text, json, sarif.'
+    description: 'Output format. run: text, json, junit. scan: text, json, sarif. spec-push: text, json.'
     required: false
     default: ''
+  file:
+    description: 'OpenAPI document to push, YAML or JSON. Required for command: spec-push.'
+    required: false
+    default: ''
+  dry-run:
+    description: 'spec-push: show what the push would change without writing (true or false). Fails with exit code 6 when the push would be refused.'
+    required: false
+    default: 'false'
+  overwrite:
+    description: 'spec-push: let the file win over values edited in Routebase since the last push (true or false).'
+    required: false
+    default: 'false'
+  folders-from-tags:
+    description: 'spec-push: put new endpoints into the folder named after their first tag (true or false).'
+    required: false
+    default: 'false'
   output:
-    description: 'Write the report to this file instead of stdout. Needed to upload JUnit or SARIF afterwards.'
+    description: 'Write the report to this file instead of stdout. Needed to upload JUnit or SARIF afterwards. Not used by spec-push.'
     required: false
     default: ''
 
@@ -123,6 +139,10 @@ runs:
         RB_VERSION: ${{ inputs.version }}
         RB_FORMAT: ${{ inputs.format }}
         RB_OUTPUT: ${{ inputs.output }}
+        RB_FILE: ${{ inputs.file }}
+        RB_DRY_RUN: ${{ inputs.dry-run }}
+        RB_OVERWRITE: ${{ inputs.overwrite }}
+        RB_FOLDERS: ${{ inputs.folders-from-tags }}
       run: |
         set -u
         args=()
@@ -154,13 +174,26 @@ runs:
             args=(promote "$RB_SPEC" "$RB_VERSION" --env "$RB_ENVIRONMENT")
             if [ -n "$RB_PROJECT" ]; then args+=(--project "$RB_PROJECT"); fi
             ;;
+          spec-push)
+            require spec "$RB_SPEC"
+            require file "$RB_FILE"
+            args=(spec push "$RB_SPEC" --file "$RB_FILE")
+            if [ -n "$RB_PROJECT" ]; then args+=(--project "$RB_PROJECT"); fi
+            if [ "$RB_DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+            if [ "$RB_OVERWRITE" = "true" ]; then args+=(--overwrite); fi
+            if [ "$RB_FOLDERS" = "true" ]; then args+=(--folders-from-tags); fi
+            ;;
           *)
-            echo "::error::unknown command '$RB_COMMAND'. Use run, scan or promote."
+            echo "::error::unknown command '$RB_COMMAND'. Use run, scan, spec-push or promote."
             exit 2
             ;;
         esac
 
         if [ -n "$RB_FORMAT" ]; then args+=(--format "$RB_FORMAT"); fi
+        if [ -n "$RB_OUTPUT" ] && [ "$RB_COMMAND" = "spec-push" ]; then
+          echo "::warning::the output input is not used by spec-push; the result is printed to the log."
+          RB_OUTPUT=""
+        fi
         if [ -n "$RB_OUTPUT" ]; then
           mkdir -p "$(dirname "$RB_OUTPUT")"
           args+=(--output "$RB_OUTPUT")
@@ -193,11 +226,11 @@ runs:
         case "${CODE:-2}" in
           0) echo "Routebase finished successfully." ;;
           1) echo "::error::The run failed — tests failed, or a finding tripped --fail-on." ;;
-          2) echo "::error::Configuration error (missing API key or a bad flag)." ;;
+          2) echo "::error::Configuration or input error (missing API key, a bad flag, or a file that is not valid OpenAPI)." ;;
           3) echo "::error::Network error, or the run did not complete." ;;
           4) echo "::error::Authentication failed. Check the api-key input, its scopes and the region." ;;
           5) echo "::error::Project, suite or profile not found. Check the ids and the region." ;;
-          6) echo "::error::Conflict — a page changed remotely since the last pull." ;;
+          6) echo "::error::Conflict with the current state in Routebase: a docs page changed remotely since the last pull, a spec push met values edited in Routebase since the last push (push with overwrite to let the file win), or the spec has no single draft." ;;
           *) echo "::error::Routebase CLI exited with ${CODE:-unknown}." ;;
         esac
         exit "${CODE:-2}"
