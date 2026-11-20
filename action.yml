@@ -1,5 +1,5 @@
 name: 'Routebase API Testing'
-description: 'Run Routebase API test suites and security scans in CI, push a spec generated from code, or promote a spec version after a deploy.'
+description: 'Run Routebase API test suites and security scans in CI, push a spec generated from code, or promote a spec version.'
 author: 'Routebase GmbH'
 
 branding:
