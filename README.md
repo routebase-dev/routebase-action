@@ -90,6 +90,51 @@ When someone edited a value in Routebase that the file owns since the last push,
 with exit code `6` and lists the conflicts. Set `overwrite: true` to let the file win. The first push
 into a spec that has content but was never pushed needs `overwrite: true` once.
 
+## Push docs and preview pull requests
+
+Pushes a folder of Markdown pages, as written by `routebase docs pull`, into a Draft or Review
+version of your documentation. With `preview: true` it also builds a portal preview of that version
+and, on a pull request, posts the link as a comment. Later runs update the same comment, so the pull
+request always shows one current link. Needs a key with `docs:write`, plus `docs:manage-portal` for
+`preview`, and `@v2.3.0` or later of this action (CLI `2.4.0`).
+
+```yaml
+# Pull request job: push into the Draft kept for previews and comment the link
+permissions:
+  contents: read
+  pull-requests: write
+steps:
+  - uses: actions/checkout@v6
+  - uses: routebase-dev/routebase-action@v2
+    with:
+      command: docs-push
+      api-key: ${{ secrets.ROUTEBASE_API_KEY }}
+      project: ${{ vars.ROUTEBASE_PROJECT_ID }}
+      dir: docs
+      version-id: ${{ vars.ROUTEBASE_PREVIEW_VERSION_ID }}
+      preview: true
+```
+
+```yaml
+# Job on main: push into the version your main branch owns
+- uses: routebase-dev/routebase-action@v2
+  with:
+    command: docs-push
+    api-key: ${{ secrets.ROUTEBASE_API_KEY }}
+    project: ${{ vars.ROUTEBASE_PROJECT_ID }}
+    dir: docs
+    version-id: ${{ vars.ROUTEBASE_DOCS_VERSION_ID }}
+```
+
+A preview shows the version the job pushed into, so a pull request job writes its pages into that
+version. Keep a Draft for previews and pass its id as `version-id`, so pull requests never write into
+the version your `main` branch pushes into. The link stops working after the lifetime set under
+**Public Portal → Advanced → Preview links**, which is 24 hours unless you change it.
+
+The comment needs `pull-requests: write` in the job. Without it the push and the preview still
+succeed, the action warns, and the link is in the `preview-url` output. Pull requests from forks get
+no repository secrets, so they get no preview either.
+
 ## Promote a version after a deploy
 
 Records which version an environment actually serves, so drift is measured against the right
@@ -109,22 +154,28 @@ contract.
 
 | Input | Required for | Description |
 | --- | --- | --- |
-| `command` | always | `run`, `scan`, `spec-push` or `promote` |
+| `command` | always | `run`, `scan`, `spec-push`, `docs-push` or `promote` |
 | `api-key` | always | Pass from a repository secret, never inline |
 | `region` | — | `us` if your organization is hosted in the US. See below |
-| `project` | `run`, `scan` | Project id. Optional for `promote` and `spec-push` |
+| `project` | `run`, `scan`, `docs-push` | Project id. Optional for `promote` and `spec-push` |
 | `suite` | `run` | Test suite id |
 | `profile` | `scan` | Scan profile id |
 | `fail-on` | — | Fail the scan at this severity or higher, e.g. `high` |
 | `spec` | `promote`, `spec-push` | API specification, name or id |
 | `file` | `spec-push` | OpenAPI document to push, YAML or JSON |
-| `dry-run` | — | `spec-push`: show the changes without writing |
+| `dry-run` | — | `spec-push` and `docs-push`: show the changes without writing |
 | `overwrite` | — | `spec-push`: let the file win over edits made in Routebase |
 | `folders-from-tags` | — | `spec-push`: put new endpoints into the folder of their first tag |
 | `version` | `promote` | Version to promote, e.g. `1.4.0` |
 | `environment` | `promote` | Target environment. Optional for `run` |
 | `format` | — | `run`: `text`, `json`, `junit`. `scan`: `text`, `json`, `sarif`. `spec-push`: `text`, `json` |
-| `output` | — | Write the report to this path instead of stdout. Not used by `spec-push` |
+| `dir` | — | `docs-push`: folder with the Markdown pages, default `docs` |
+| `doc` | — | `docs-push`: documentation id, optional when the project has exactly one |
+| `version-id` | — | `docs-push`: Draft or Review version to push into, default the newest one |
+| `preview` | — | `docs-push`: build a portal preview and set `preview-url` |
+| `pr-comment` | — | `docs-push` with `preview` on a pull request: post and update the link as a comment, default `true` |
+| `github-token` | — | Token for the comment, default the job token |
+| `output` | — | Write the report to this path instead of stdout. Not used by `spec-push` and `docs-push` |
 | `cli-version` | — | Version of the `Routebase.Cli` package. See below |
 
 Inputs that do not apply to the chosen `command` are ignored.
@@ -135,6 +186,8 @@ Inputs that do not apply to the chosen `command` are ignored.
 | --- | --- |
 | `exit-code` | The CLI's exit code, see the table below |
 | `report-path` | The path given in `output`, empty when unset |
+| `preview-url` | `docs-push` with `preview`: the preview link, empty otherwise |
+| `preview-expires` | `docs-push` with `preview`: when the link stops working, UTC |
 
 ## Region
 
@@ -154,6 +207,7 @@ organizations need nothing.
 | `4` | Authentication error — the key is wrong, in the wrong region, or lacks the permission the command needs |
 | `5` | Project, suite, profile, spec or version not found |
 | `6` | Conflict with the current state in Routebase, for `spec-push` values edited in Routebase since the last push, or a spec without a single draft |
+| `7` | `docs-push` with `preview`: the pages were pushed, but the preview failed or was not ready within 10 minutes |
 
 The meanings have been stable since CLI 1.0.0, with one change in **2.0.0**: a key that
 authenticates but lacks the required permission (HTTP `403`) now exits `4` for every command.
