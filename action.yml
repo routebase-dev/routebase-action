@@ -10,7 +10,7 @@ branding:
 
 inputs:
   command:
-    description: 'What to run: run (test suite), scan (security scan), spec-push (push an OpenAPI file into a spec''s draft), or promote (pin a spec version to an environment).'
+    description: 'What to run: run (test suite), scan (security scan), spec-push (push an OpenAPI file into a spec''s draft), docs-push (push Markdown docs, optionally with a portal preview), or promote (pin a spec version to an environment).'
     required: true
   api-key:
     description: 'Routebase API key. Create one under Settings → API Keys and pass it from a repository secret.'
@@ -22,10 +22,10 @@ inputs:
   cli-version:
     description: 'Version of the Routebase.Cli NuGet package to install. Pinned on purpose — see the README.'
     required: false
-    default: '2.3.0'
+    default: '2.4.0'
 
   project:
-    description: 'Project id. Required for run and scan; optional for promote and spec-push.'
+    description: 'Project id. Required for run, scan and docs-push; optional for promote and spec-push.'
     required: false
     default: ''
   suite:
@@ -61,7 +61,7 @@ inputs:
     required: false
     default: ''
   dry-run:
-    description: 'spec-push: show what the push would change without writing (true or false). Fails with exit code 6 when the push would be refused.'
+    description: 'spec-push and docs-push: show what the push would change without writing (true or false). spec-push fails with exit code 6 when the push would be refused.'
     required: false
     default: 'false'
   overwrite:
@@ -73,17 +73,47 @@ inputs:
     required: false
     default: 'false'
   output:
-    description: 'Write the report to this file instead of stdout. Needed to upload JUnit or SARIF afterwards. Not used by spec-push.'
+    description: 'Write the report to this file instead of stdout. Needed to upload JUnit or SARIF afterwards. Not used by spec-push and docs-push.'
     required: false
     default: ''
+  dir:
+    description: 'docs-push: folder with the Markdown files, as written by routebase docs pull.'
+    required: false
+    default: 'docs'
+  doc:
+    description: 'docs-push: documentation id. Optional when the project has exactly one.'
+    required: false
+    default: ''
+  version-id:
+    description: 'docs-push: id of the Draft or Review version to push into. Default is the newest one.'
+    required: false
+    default: ''
+  preview:
+    description: 'docs-push: build a portal preview of the pushed version and set the preview-url output (true or false). Needs docs:manage-portal on the key.'
+    required: false
+    default: 'false'
+  pr-comment:
+    description: 'docs-push with preview on a pull request: post the preview link as a comment and update it on later runs (true or false). Needs pull-requests: write.'
+    required: false
+    default: 'true'
+  github-token:
+    description: 'Token used to write the pull request comment. The default job token works when the job grants pull-requests: write.'
+    required: false
+    default: ${{ github.token }}
 
 outputs:
   exit-code:
-    description: 'Exit code of the Routebase CLI. 0 success, 1 run failed or gate tripped, 2 config, 3 network, 4 auth or missing scope, 5 not found, 6 conflict.'
+    description: 'Exit code of the Routebase CLI. 0 success, 1 run failed or gate tripped, 2 config, 3 network, 4 auth or missing scope, 5 not found, 6 conflict, 7 preview failed.'
     value: ${{ steps.execute.outputs.exit-code }}
   report-path:
     description: 'Path of the written report, when the output input was set. Empty otherwise.'
     value: ${{ steps.execute.outputs.report-path }}
+  preview-url:
+    description: 'docs-push with preview: link of the portal preview. Empty otherwise.'
+    value: ${{ steps.execute.outputs.preview-url }}
+  preview-expires:
+    description: 'docs-push with preview: when the preview link stops working, in UTC (ISO 8601). Empty otherwise.'
+    value: ${{ steps.execute.outputs.preview-expires }}
 
 runs:
   using: 'composite'
@@ -143,6 +173,10 @@ runs:
         RB_DRY_RUN: ${{ inputs.dry-run }}
         RB_OVERWRITE: ${{ inputs.overwrite }}
         RB_FOLDERS: ${{ inputs.folders-from-tags }}
+        RB_DIR: ${{ inputs.dir }}
+        RB_DOC: ${{ inputs.doc }}
+        RB_VERSION_ID: ${{ inputs.version-id }}
+        RB_PREVIEW: ${{ inputs.preview }}
       run: |
         set -u
         args=()
@@ -183,15 +217,25 @@ runs:
             if [ "$RB_OVERWRITE" = "true" ]; then args+=(--overwrite); fi
             if [ "$RB_FOLDERS" = "true" ]; then args+=(--folders-from-tags); fi
             ;;
+          docs-push)
+            require project "$RB_PROJECT"
+            require dir "$RB_DIR"
+            args=(docs push --project "$RB_PROJECT" --dir "$RB_DIR")
+            if [ -n "$RB_DOC" ]; then args+=(--doc "$RB_DOC"); fi
+            if [ -n "$RB_VERSION_ID" ]; then args+=(--version-id "$RB_VERSION_ID"); fi
+            if [ "$RB_DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+            if [ "$RB_PREVIEW" = "true" ]; then args+=(--preview); fi
+            ;;
           *)
-            echo "::error::unknown command '$RB_COMMAND'. Use run, scan, spec-push or promote."
+            echo "::error::unknown command '$RB_COMMAND'. Use run, scan, spec-push, docs-push or promote."
             exit 2
             ;;
         esac
 
-        if [ -n "$RB_FORMAT" ]; then args+=(--format "$RB_FORMAT"); fi
-        if [ -n "$RB_OUTPUT" ] && [ "$RB_COMMAND" = "spec-push" ]; then
-          echo "::warning::the output input is not used by spec-push; the result is printed to the log."
+        # docs push knows neither --format nor --output.
+        if [ "$RB_COMMAND" != "docs-push" ] && [ -n "$RB_FORMAT" ]; then args+=(--format "$RB_FORMAT"); fi
+        if [ -n "$RB_OUTPUT" ] && { [ "$RB_COMMAND" = "spec-push" ] || [ "$RB_COMMAND" = "docs-push" ]; }; then
+          echo "::warning::the output input is not used by $RB_COMMAND; the result is printed to the log."
           RB_OUTPUT=""
         fi
         if [ -n "$RB_OUTPUT" ]; then
@@ -201,12 +245,26 @@ runs:
 
         echo "+ routebase ${args[*]}"
         set +e
-        routebase "${args[@]}"
-        code=$?
+        if [ "$RB_COMMAND" = "docs-push" ]; then
+          # The preview link and its expiry are the last two lines of the output.
+          log="$RUNNER_TEMP/routebase-docs-push.log"
+          routebase "${args[@]}" 2>&1 | tee "$log"
+          code=${PIPESTATUS[0]}
+          preview_url=$(sed -n 's/^Preview: //p' "$log" | tail -n 1)
+          preview_expires=$(sed -n 's/^Expires: //p' "$log" | tail -n 1)
+          rm -f "$log"
+        else
+          routebase "${args[@]}"
+          code=$?
+          preview_url=""
+          preview_expires=""
+        fi
         set -e
 
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"
         echo "report-path=$RB_OUTPUT" >> "$GITHUB_OUTPUT"
+        echo "preview-url=$preview_url" >> "$GITHUB_OUTPUT"
+        echo "preview-expires=$preview_expires" >> "$GITHUB_OUTPUT"
 
     # Always: a failed run must not leave the key on the runner. Matters on
     # self-hosted runners, where the home directory outlives the job.
@@ -214,6 +272,47 @@ runs:
       if: always()
       shell: bash
       run: rm -f "$HOME/.routebase/config.json"
+
+    # One comment per pull request, found again by its marker and updated in place, so a PR
+    # pushed ten times shows one current link instead of ten stale ones. A missing permission
+    # only warns: the job result stays the CLI's.
+    - name: Comment on the pull request
+      if: >-
+        always()
+        && steps.execute.outputs.preview-url != ''
+        && inputs.pr-comment == 'true'
+        && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PREVIEW_URL: ${{ steps.execute.outputs.preview-url }}
+        PREVIEW_EXPIRES: ${{ steps.execute.outputs.preview-expires }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        marker='<!-- routebase-docs-preview -->'
+        if ! command -v gh > /dev/null; then
+          echo "::warning::GitHub CLI (gh) is not installed on this runner, so the preview link was not posted. It is in the preview-url output."
+          exit 0
+        fi
+        body="$marker
+        ### Docs preview
+
+        $PREVIEW_URL
+
+        The link works until $PREVIEW_EXPIRES (UTC). Built from ${HEAD_SHA:0:7} by Routebase."
+        existing=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
+          --jq ".[] | select(.body | startswith(\"$marker\")) | .id" 2> /dev/null | head -n 1)
+        if [ -n "$existing" ]; then
+          gh api -X PATCH "repos/$REPO/issues/comments/$existing" -f body="$body" > /dev/null \
+            && echo "Updated the preview comment." \
+            || echo "::warning::Could not update the preview comment. Grant the job pull-requests: write."
+        else
+          gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="$body" > /dev/null \
+            && echo "Posted the preview comment." \
+            || echo "::warning::Could not post the preview comment. Grant the job pull-requests: write."
+        fi
 
     # Re-raise what the CLI returned, so a failing suite or a tripped scan gate
     # turns the job red instead of passing silently.
@@ -231,6 +330,7 @@ runs:
           4) echo "::error::Authentication failed. Check the api-key input, its scopes and the region." ;;
           5) echo "::error::Project, suite or profile not found. Check the ids and the region." ;;
           6) echo "::error::Conflict with the current state in Routebase: a docs page changed remotely since the last pull, a spec push met values edited in Routebase since the last push (push with overwrite to let the file win), or the spec has no single draft." ;;
+          7) echo "::error::The pages were pushed, but the portal preview failed or was not ready within 10 minutes." ;;
           *) echo "::error::Routebase CLI exited with ${CODE:-unknown}." ;;
         esac
         exit "${CODE:-2}"
