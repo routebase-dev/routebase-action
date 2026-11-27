@@ -14,7 +14,7 @@ The suite runs against your environment, and the job fails when a test fails. `-
 gives you a report GitHub renders as a real test summary.
 
 ```yaml
-- uses: routebase-dev/routebase-action@v2
+- uses: routebase-dev/routebase-action@v3
   with:
     command: run
     api-key: ${{ secrets.ROUTEBASE_API_KEY }}
@@ -42,7 +42,7 @@ permissions:
   security-events: write
 
 steps:
-  - uses: routebase-dev/routebase-action@v2
+  - uses: routebase-dev/routebase-action@v3
     with:
       command: scan
       api-key: ${{ secrets.ROUTEBASE_API_KEY }}
@@ -63,11 +63,17 @@ steps:
 Keeps one living specification in Routebase when your OpenAPI document comes out of the code. The
 push updates the spec's draft in place, so endpoint links of tests, mock rules and monitors stay.
 Needs a key with the scopes `specs:write` and `specs:delete` (`specs:read` for `dry-run`), and
-`@v2.2.0` or later of this action (CLI `2.3.0`).
+`@v3` of this action (CLI `3.0.0`).
+
+A push with a breaking change against the draft, such as a removed endpoint, writes nothing. It
+stops with exit code `6`, names the breaking changes and links to the page in Routebase where you
+decide. There you accept the change into the draft, or you change the code so it matches the
+contract again. A dry run answers the same way, so the pull request job is the check: it fails with
+exit code `6` before the merge, as the push on the default branch would after it.
 
 ```yaml
-# On a pull request: show what the merge would change
-- uses: routebase-dev/routebase-action@v2
+# Pull request: the check. Fails with exit code 6 when the push would be refused.
+- uses: routebase-dev/routebase-action@v3
   with:
     command: spec-push
     api-key: ${{ secrets.ROUTEBASE_API_KEY }}
@@ -75,20 +81,54 @@ Needs a key with the scopes `specs:write` and `specs:delete` (`specs:read` for `
     spec: Orders API
     file: openapi.json
     dry-run: true
-
-# On main: write it
-- uses: routebase-dev/routebase-action@v2
-  with:
-    command: spec-push
-    api-key: ${{ secrets.ROUTEBASE_API_KEY }}
-    project: ${{ vars.ROUTEBASE_PROJECT_ID }}
-    spec: Orders API
-    file: openapi.json
 ```
 
-When someone edited a value in Routebase that the file owns since the last push, the push stops
+On the default branch the push writes the draft. To take breaking changes on purpose without the
+page in Routebase, accept them for a single run through an input of a manual run, never as a fixed
+value of the job:
+
+```yaml
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      accept-breaking:
+        description: Take breaking changes into the draft in this run
+        type: boolean
+        default: false
+
+jobs:
+  spec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # ... build the OpenAPI document ...
+      - uses: routebase-dev/routebase-action@v3
+        with:
+          command: spec-push
+          api-key: ${{ secrets.ROUTEBASE_API_KEY }}
+          project: ${{ vars.ROUTEBASE_PROJECT_ID }}
+          spec: Orders API
+          file: openapi.json
+          accept-breaking: ${{ inputs.accept-breaking || false }}
+```
+
+`inputs` is empty on a `push`, so the expression falls back to `false` there. A spec whose
+**Breaking changes from code** setting is **Ask, decide in Routebase only** cannot be accepted from
+a pipeline, and the run stays at exit code `6` until someone decides on the linked page.
+
+When someone edited a value in Routebase that the file owns since the last push, the push also stops
 with exit code `6` and lists the conflicts. Set `overwrite: true` to let the file win. The first push
 into a spec that has content but was never pushed needs `overwrite: true` once.
+
+When the spec keeps several major versions side by side, such as a 3.x line that still gets fixes
+next to 4.x, each line has its own draft. Set `line: 3` in the job that builds the 3.x code, and the
+push goes into the draft of line 3. When the line has no draft, the push first creates the next
+patch of the line's latest release as a copy.
+
+Each run writes a summary to the job page: the counts, the breaking changes with their reasons, the
+conflicts and the link to the decision.
 
 ## Push docs and preview pull requests
 
@@ -105,7 +145,7 @@ permissions:
   pull-requests: write
 steps:
   - uses: actions/checkout@v6
-  - uses: routebase-dev/routebase-action@v2
+  - uses: routebase-dev/routebase-action@v3
     with:
       command: docs-push
       api-key: ${{ secrets.ROUTEBASE_API_KEY }}
@@ -117,7 +157,7 @@ steps:
 
 ```yaml
 # Job on main: push into the version your main branch owns
-- uses: routebase-dev/routebase-action@v2
+- uses: routebase-dev/routebase-action@v3
   with:
     command: docs-push
     api-key: ${{ secrets.ROUTEBASE_API_KEY }}
@@ -141,7 +181,7 @@ Records which version an environment actually serves, so drift is measured again
 contract.
 
 ```yaml
-- uses: routebase-dev/routebase-action@v2
+- uses: routebase-dev/routebase-action@v3
   with:
     command: promote
     api-key: ${{ secrets.ROUTEBASE_API_KEY }}
@@ -166,6 +206,8 @@ contract.
 | `dry-run` | — | `spec-push` and `docs-push`: show the changes without writing |
 | `overwrite` | — | `spec-push`: let the file win over edits made in Routebase |
 | `folders-from-tags` | — | `spec-push`: put new endpoints into the folder of their first tag |
+| `accept-breaking` | — | `spec-push`: take the breaking changes into the draft in this run. Pass it per run |
+| `line` | — | `spec-push`: major version line to push into, such as `4`, when the spec keeps several lines |
 | `version` | `promote` | Version to promote, e.g. `1.4.0` |
 | `environment` | `promote` | Target environment. Optional for `run` |
 | `format` | — | `run`: `text`, `json`, `junit`. `scan`: `text`, `json`, `sarif`. `spec-push`: `text`, `json` |
@@ -206,20 +248,23 @@ organizations need nothing.
 | `3` | Network error, or the run did not complete |
 | `4` | Authentication error — the key is wrong, in the wrong region, or lacks the permission the command needs |
 | `5` | Project, suite, profile, spec or version not found |
-| `6` | Conflict with the current state in Routebase, for `spec-push` values edited in Routebase since the last push, or a spec without a single draft |
+| `6` | Refused by the current state in Routebase: a `spec-push` with breaking changes that need a decision (also in a dry run), values edited in Routebase since the last push, a docs page changed remotely, or a spec without a single draft |
 | `7` | `docs-push` with `preview`: the pages were pushed, but the preview failed or was not ready within 10 minutes |
 
-The meanings have been stable since CLI 1.0.0, with one change in **2.0.0**: a key that
-authenticates but lacks the required permission (HTTP `403`) now exits `4` for every command.
+The meanings have been stable since CLI 1.0.0, with two changes. In **2.0.0** a key that
+authenticates but lacks the required permission (HTTP `403`) exits `4` for every command.
 `run` and `list` returned `3` for that case before, which sent you looking at the network rather
 than at the key's scopes. If your pipeline branches on `3` for either command, check it before
-moving `cli-version` to `2.0.0`.
+moving `cli-version` to `2.0.0`. In **3.0.0** `spec-push` exits `6` when the file has breaking
+changes against the draft, in a dry run too, unless the run sets `accept-breaking`. With CLI 2.x
+such a push went through unless the spec's own setting refused it.
 
 ## Versioning
 
-`@v2` tracks the latest v2 release and is what you want. `@v1` stays on CLI 1.0.1, where a key
-with missing scopes exits `3` instead of `4` — see the note under Exit codes. Pin a full version
-like `@v2.0.0` if you want a fixed one.
+`@v3` tracks the latest v3 release and is what you want. `@v2` stays on CLI 2.4.0, where
+`spec-push` writes breaking changes unless the spec's own setting refuses them. `@v1` stays on CLI
+1.0.1, where a key with missing scopes exits `3` instead of `4`, see the note under Exit codes. Pin
+a full version like `@v3.0.0` if you want a fixed one.
 
 The action installs a **pinned** version of the `Routebase.Cli` NuGet package rather than the
 latest. An action that silently moved to a new CLI would change what your pipeline does without
