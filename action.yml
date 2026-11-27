@@ -22,7 +22,7 @@ inputs:
   cli-version:
     description: 'Version of the Routebase.Cli NuGet package to install. Pinned on purpose — see the README.'
     required: false
-    default: '2.4.0'
+    default: '3.0.0'
 
   project:
     description: 'Project id. Required for run, scan and docs-push; optional for promote and spec-push.'
@@ -61,7 +61,7 @@ inputs:
     required: false
     default: ''
   dry-run:
-    description: 'spec-push and docs-push: show what the push would change without writing (true or false). spec-push fails with exit code 6 when the push would be refused.'
+    description: 'spec-push and docs-push: show what the push would change without writing (true or false). spec-push fails with exit code 6 when the push would be refused, for breaking changes or for values edited in Routebase since the last push.'
     required: false
     default: 'false'
   overwrite:
@@ -70,6 +70,10 @@ inputs:
     default: 'false'
   folders-from-tags:
     description: 'spec-push: put new endpoints into the folder named after their first tag (true or false).'
+    required: false
+    default: 'false'
+  accept-breaking:
+    description: 'spec-push: take the breaking changes into the draft in this run (true or false). Pass it per run, never as a fixed value.'
     required: false
     default: 'false'
   output:
@@ -82,6 +86,10 @@ inputs:
     default: 'docs'
   doc:
     description: 'docs-push: documentation id. Optional when the project has exactly one.'
+    required: false
+    default: ''
+  line:
+    description: 'spec-push: major version line to push into, such as 4, when the spec keeps several lines. A line without a draft gets one as a copy of its latest release.'
     required: false
     default: ''
   version-id:
@@ -103,7 +111,7 @@ inputs:
 
 outputs:
   exit-code:
-    description: 'Exit code of the Routebase CLI. 0 success, 1 run failed or gate tripped, 2 config, 3 network, 4 auth or missing scope, 5 not found, 6 conflict, 7 preview failed.'
+    description: 'Exit code of the Routebase CLI. 0 success, 1 run failed or gate tripped, 2 config, 3 network, 4 auth or missing scope, 5 not found, 6 refused (breaking changes need a decision, or a conflict), 7 preview failed.'
     value: ${{ steps.execute.outputs.exit-code }}
   report-path:
     description: 'Path of the written report, when the output input was set. Empty otherwise.'
@@ -173,6 +181,8 @@ runs:
         RB_DRY_RUN: ${{ inputs.dry-run }}
         RB_OVERWRITE: ${{ inputs.overwrite }}
         RB_FOLDERS: ${{ inputs.folders-from-tags }}
+        RB_ACCEPT_BREAKING: ${{ inputs.accept-breaking }}
+        RB_LINE: ${{ inputs.line }}
         RB_DIR: ${{ inputs.dir }}
         RB_DOC: ${{ inputs.doc }}
         RB_VERSION_ID: ${{ inputs.version-id }}
@@ -216,6 +226,8 @@ runs:
             if [ "$RB_DRY_RUN" = "true" ]; then args+=(--dry-run); fi
             if [ "$RB_OVERWRITE" = "true" ]; then args+=(--overwrite); fi
             if [ "$RB_FOLDERS" = "true" ]; then args+=(--folders-from-tags); fi
+            if [ "$RB_ACCEPT_BREAKING" = "true" ]; then args+=(--accept-breaking); fi
+            if [ -n "$RB_LINE" ]; then args+=(--line "$RB_LINE"); fi
             ;;
           docs-push)
             require project "$RB_PROJECT"
@@ -329,7 +341,7 @@ runs:
           3) echo "::error::Network error, or the run did not complete." ;;
           4) echo "::error::Authentication failed. Check the api-key input, its scopes and the region." ;;
           5) echo "::error::Project, suite or profile not found. Check the ids and the region." ;;
-          6) echo "::error::Conflict with the current state in Routebase: a docs page changed remotely since the last pull, a spec push met values edited in Routebase since the last push (push with overwrite to let the file win), or the spec has no single draft." ;;
+          6) echo "::error::Refused by the current state in Routebase: a spec push has breaking changes that need a decision (decide on the linked page, change the code, or run once with accept-breaking), a spec push met values edited in Routebase since the last push (push with overwrite to let the file win), a docs page changed remotely since the last pull, or the spec has no single draft." ;;
           7) echo "::error::The pages were pushed, but the portal preview failed or was not ready within 10 minutes." ;;
           *) echo "::error::Routebase CLI exited with ${CODE:-unknown}." ;;
         esac
